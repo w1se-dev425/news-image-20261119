@@ -1,50 +1,62 @@
-"""news-image-20261119 entry (Python 3.13, standard library only).
+"""news-image-20261119 entry.
 
-Writes one image summing up Thursday 19 November 2026's world news to
-/output/entry.png: a newspaper front page (masthead, hero illustration of
-the day's lead story, four more stories and a briefs strip) composed from
-that day's top stories. The program reads the bundled image `entry.png` (held in this repository),
-checks it really is a PNG no larger than 1024x1024, writes it to the output
-path and verifies the copy byte for byte, so it is fully deterministic: no
-randomness, no network, no clock reads; two runs write identical bytes.
+Builds the one-image summary of Thursday 19 November 2026's world news.
+The front page artwork is bundled with this repository as entry.png; the
+script's job is to confirm that file is a well-formed PNG within the
+size limit and place an exact copy at the output location. Nothing here
+touches the network, the clock or any random source, so running it twice
+yields the same bytes twice.
 """
 
 import hashlib
 import os
 import struct
+import sys
 from pathlib import Path
 
-OUTPUT_DIR = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
-
-HERE = Path(__file__).resolve().parent
-SRC = HERE / "entry.png"
-
-PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
-MAX_SIDE = 1024
+IMAGE_FILE = "entry.png"
+SIDE_LIMIT = 1024
+MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
-def read_and_validate(path):
-    data = path.read_bytes()
-    if not data.startswith(PNG_MAGIC):
-        raise SystemExit(f"not a PNG file: {path}")
-    if len(data) < 33:
-        raise SystemExit(f"PNG too short to hold an IHDR chunk: {path}")
-    width, height = struct.unpack(">II", data[16:24])
-    if width == 0 or height == 0 or width > MAX_SIDE or height > MAX_SIDE:
-        raise SystemExit(
-            f"PNG is {width}x{height}, expected at most {MAX_SIDE}x{MAX_SIDE}: {path}"
-        )
-    return data, width, height
+def abort(reason):
+    print("error:", reason, file=sys.stderr)
+    sys.exit(1)
+
+
+def fetch_source():
+    folder = Path(__file__).resolve().parent
+    candidate = folder / IMAGE_FILE
+    try:
+        content = candidate.read_bytes()
+    except OSError as exc:
+        abort(f"cannot read {candidate}: {exc}")
+    if content[: len(MAGIC)] != MAGIC:
+        abort(f"{candidate} is not a PNG file")
+    if len(content) < 24:
+        abort(f"{candidate} is too short to carry a PNG header")
+    if content[12:16] != b"IHDR":
+        abort(f"{candidate} has no IHDR chunk where one belongs")
+    wide, tall = struct.unpack(">II", content[16:24])
+    if not (1 <= wide <= SIDE_LIMIT and 1 <= tall <= SIDE_LIMIT):
+        abort(f"image measures {wide}x{tall}; the cap is {SIDE_LIMIT}x{SIDE_LIMIT}")
+    return content, wide, tall
+
+
+def place_copy(content, wide, tall):
+    out_dir = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    destination = out_dir / IMAGE_FILE
+    destination.write_bytes(content)
+    after = destination.read_bytes()
+    if hashlib.sha256(after).hexdigest() != hashlib.sha256(content).hexdigest():
+        abort(f"{destination} came out different from the source")
+    print(f"wrote {destination} ({wide}x{tall}, {len(content)} bytes)")
 
 
 def main():
-    data, width, height = read_and_validate(SRC)
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    out = OUTPUT_DIR / "entry.png"
-    out.write_bytes(data)
-    if hashlib.sha256(out.read_bytes()).hexdigest() != hashlib.sha256(data).hexdigest():
-        raise SystemExit(f"output does not match source: {out}")
-    print(f"wrote {out} ({width}x{height}, {len(data)} bytes)")
+    content, wide, tall = fetch_source()
+    place_copy(content, wide, tall)
 
 
 if __name__ == "__main__":
